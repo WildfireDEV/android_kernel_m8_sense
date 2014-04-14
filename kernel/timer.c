@@ -816,9 +816,7 @@ unsigned long apply_slack(struct timer_list *timer, unsigned long expires)
 
 	bit = find_last_bit(&mask, BITS_PER_LONG);
 
-	mask = (1UL << bit) - 1;
-
-	expires_limit = expires_limit & ~(mask);
+    expires_limit = (expires_limit >> bit) << bit;
 
 	return expires_limit;
 }
@@ -866,13 +864,7 @@ EXPORT_SYMBOL(mod_timer);
  *
  * mod_timer_pinned() is a way to update the expire field of an
  * active timer (if the timer is inactive it will be activated)
- * and to ensure that the timer is scheduled on the current CPU.
- *
- * Note that this does not prevent the timer from being migrated
- * when the current CPU goes offline.  If this is a problem for
- * you, use CPU-hotplug notifiers to handle it correctly, for
- * example, cancelling the timer when the corresponding CPU goes
- * offline.
+ * and not allow the timer to be migrated to a different CPU.
  *
  * mod_timer_pinned(timer, expires) is equivalent to:
  *
