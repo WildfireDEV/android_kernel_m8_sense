@@ -3066,7 +3066,6 @@ static void cwmcu_irq_work_func(struct work_struct *work)
 			} else {
 				D("[CWMCU] Discard gesture wake\n");
 			}
-		}	
 		}
 		clear_intr = CW_MCU_INT_BIT_HTC_GESTURE_MOTION_HIDI;
 		ret = CWMCU_i2c_write(sensor, CWSTM32_INT_ST4, &clear_intr, 1);
