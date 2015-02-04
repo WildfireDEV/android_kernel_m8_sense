@@ -1,3 +1,6 @@
+# CONFIG_LOCALVERSION is not set
+# CONFIG_LOCALVERSION_AUTO is not set
+
 #***
 # build unified device tree
 #***
