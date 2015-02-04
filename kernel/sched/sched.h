@@ -960,7 +960,9 @@ static inline unsigned int do_avg_nr_running(struct rq *rq)
 
 static inline void inc_nr_running(struct rq *rq)
 {
+#if defined(CONFIG_MSM_DCVS)
 	sched_update_nr_prod(cpu_of(rq), rq->nr_running, true);
+#endif
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_CPUQUIET_FRAMEWORK)
 	write_seqcount_begin(&rq->ave_seqcnt);
 	rq->ave_nr_running = do_avg_nr_running(rq);
@@ -974,7 +976,10 @@ static inline void inc_nr_running(struct rq *rq)
 
 static inline void dec_nr_running(struct rq *rq)
 {
+#if defined(CONFIG_MSM_DCVS)
 	sched_update_nr_prod(cpu_of(rq), rq->nr_running, false);
+#endif
+
 #if defined(CONFIG_INTELLI_PLUG) || defined(CONFIG_CPUQUIET_FRAMEWORK)
 	write_seqcount_begin(&rq->ave_seqcnt);
 	rq->ave_nr_running = do_avg_nr_running(rq);
