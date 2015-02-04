@@ -265,6 +265,88 @@ static irqreturn_t synaptics_irq_thread(int irq, void *ptr);
 
 extern unsigned int get_tamper_sf(void);
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+#define S2S_Y_MAX 2880
+#define S2S_X_MAX 1800
+#define S2S_Y_DELTA 220
+#define S2S_Y_LIMIT S2S_Y_MAX-S2S_Y_DELTA
+#define S2S_X_P1 600
+#define S2S_X_P2 S2S_X_MAX-S2S_X_P1
+#define S2S_X_EPS 500
+#define S2S_PWRKEY_DUR 60
+
+static int direction = 0;
+static int first_x = 0;
+static bool scr_suspended = false;
+static int s2s_switch = 1;
+
+static struct input_dev * sweep2sleep_pwrdev;
+static DEFINE_MUTEX(pwrkeyworklock);
+
+static void sweep2sleep_presspwr(struct work_struct * sweep2sleep_presspwr_work) {
+	if (!mutex_trylock(&pwrkeyworklock))
+		return;
+	input_event(sweep2sleep_pwrdev, EV_KEY, KEY_POWER, 1);
+	input_event(sweep2sleep_pwrdev, EV_SYN, 0, 0);
+	msleep(S2S_PWRKEY_DUR);
+	input_event(sweep2sleep_pwrdev, EV_KEY, KEY_POWER, 0);
+	input_event(sweep2sleep_pwrdev, EV_SYN, 0, 0);
+	msleep(S2S_PWRKEY_DUR);
+   	mutex_unlock(&pwrkeyworklock);
+	return;
+}
+
+static DECLARE_WORK(sweep2sleep_presspwr_work, sweep2sleep_presspwr);
+
+static void sweep2sleep_pwrtrigger(void) {
+	schedule_work(&sweep2sleep_presspwr_work);
+    return;
+}
+
+static void reset_s2s(void)
+{
+	direction = 0;
+	first_x = 0;
+}
+
+static void detect_sweep2sleep(int x, int y)
+{
+	int x_go = 0;
+	
+	if (!first_x)
+		first_x = x;
+	else
+		x_go = abs(first_x - x);
+	
+	if (y < S2S_Y_LIMIT) {
+		reset_s2s();
+		return;
+	} else if (x_go < S2S_X_EPS)
+		return;
+
+	
+	if (!direction && first_x > S2S_X_P2)
+		direction = 1; //to left
+		
+	if (!direction && first_x < S2S_X_P1)
+		direction = 2; //to right
+		
+		
+	if (!scr_suspended && direction == 1 && (s2s_switch == 1 || s2s_switch == 3) && x < S2S_X_P1) {
+		pr_debug("s2s: OFF\n");
+		sweep2sleep_pwrtrigger();
+		reset_s2s();		
+	}
+
+	if (!scr_suspended && direction == 2 && (s2s_switch == 2 || s2s_switch == 3) && x > S2S_X_P2) {
+		pr_debug("s2s: OFF\n");
+		sweep2sleep_pwrtrigger();
+		reset_s2s();		
+	}
+
+}
+#endif
+
 static DEFINE_MUTEX(syn_block_mutex);
 static void syn_block_touch(struct synaptics_ts_data *ts, int enable)
 {
@@ -1910,6 +1992,28 @@ static DEVICE_ATTR(cover, (S_IWUSR|S_IRUGO),
 	syn_cover_show, syn_cover_store);
 
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+static ssize_t synaptics_sweep2sleep_show(struct device *dev,
+		struct device_attribute *attr, char *buf)
+{
+	size_t count = 0;
+	count += sprintf(buf, "%d\n", s2s_switch);
+	return count;
+}
+
+static ssize_t synaptics_sweep2sleep_dump(struct device *dev,
+		struct device_attribute *attr, const char *buf, size_t count)
+{
+	if (buf[0] >= '0' && buf[0] <= '3' && buf[1] == '\n')
+                if (s2s_switch != buf[0] - '0')
+		        s2s_switch = buf[0] - '0';
+	return count;
+}
+
+static DEVICE_ATTR(sweep2sleep, 0666,
+	synaptics_sweep2sleep_show, synaptics_sweep2sleep_dump);
+#endif	
+	
 enum SR_REG_STATE{
 	ALLOCATE_DEV_FAIL = -2,
 	REGISTER_DEV_FAIL,
@@ -2149,6 +2253,14 @@ static int synaptics_touch_sysfs_init(void)
 		if (sysfs_create_file(android_touch_kobj, &dev_attr_diag.attr))
 			return -ENOMEM;
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	ret = sysfs_create_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
+	if (ret) {
+		printk(KERN_ERR "%s: sysfs_create_file failed\n", __func__);
+		return ret;
+	}
+#endif			
+			
 #ifdef SYN_WIRELESS_DEBUG
 	ret= gpio_request(ts->gpio_irq, "synaptics_attn");
 	if (ret) {
@@ -2202,6 +2314,9 @@ static void synaptics_touch_sysfs_remove(void)
 	sysfs_remove_file(android_touch_kobj, &dev_attr_cover.attr);
 #ifdef SYN_WIRELESS_DEBUG
 	sysfs_remove_file(android_touch_kobj, &dev_attr_enabled.attr);
+#endif
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
 #endif
 	kobject_del(android_touch_kobj);
 }
@@ -2560,6 +2675,12 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 				pr_info("[TP] Finger leave\n");
 		}
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+		if (!ts->finger_count && s2s_switch > 0) {
+			reset_s2s();
+		}
+#endif		
+
 		if (ts->pre_finger_data[0][0] < 2 || finger_pressed) {
 			base = ((ts->package_id < 3400) ? ((ts->finger_support + 3) / 4): 0);
 
@@ -2703,6 +2824,11 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 						x_pos[i] = finger_data[i][0];
 						y_pos[i] = finger_data[i][1];
 						finger_pressed &= ~BIT(i);
+
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+						if (ts->finger_count < 2 && s2s_switch > 0)
+							detect_sweep2sleep(x_pos[i], y_pos[i]);
+#endif
 
 						if ((finger_press_changed & BIT(i)) && ts->debug_log_level & BIT(3)) {
 							if(ts->width_factor && ts->height_factor){
@@ -4378,6 +4504,24 @@ static int __devinit synaptics_ts_probe(
 		pr_info("[TP] %s: error register char device", __func__);
 #endif
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	sweep2sleep_pwrdev = input_allocate_device();
+	if (!sweep2sleep_pwrdev) {
+		pr_err("Can't allocate suspend autotest power button\n");
+		goto err_alloc_dev;
+	}
+
+	input_set_capability(sweep2sleep_pwrdev, EV_KEY, KEY_POWER);
+	sweep2sleep_pwrdev->name = "s2s_pwrkey";
+	sweep2sleep_pwrdev->phys = "s2s_pwrkey/input0";
+
+	ret = input_register_device(sweep2sleep_pwrdev);
+	if (ret) {
+		pr_err("%s: input_register_device err=%d\n", __func__, ret);
+		goto err_input_dev;
+	}
+#endif
+
 	pr_info("[TP] synaptics_ts_probe: Start touchscreen %s in %s mode\n",
 			ts->input_dev->name, ts->use_irq ? "interrupt" : "polling");
 #ifdef CONFIG_OF
@@ -4395,6 +4539,13 @@ err_get_cable_config_failed:
 		free_irq(client->irq, ts);
 	else
 		destroy_workqueue(ts->syn_wq);
+#endif
+
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+err_input_dev:
+	input_free_device(sweep2sleep_pwrdev);
+err_alloc_dev:
+	pr_info("s2s: %s done\n", __func__);
 #endif
 
 err_create_wq_failed:
@@ -4448,6 +4599,11 @@ static int __devexit synaptics_ts_remove(struct i2c_client *client)
 		input_unregister_device(ts->sr_input_dev);
 	input_unregister_device(ts->input_dev);
 
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	input_unregister_device(sweep2sleep_pwrdev);
+	input_free_device(sweep2sleep_pwrdev);
+#endif
+	
 	synaptics_touch_sysfs_remove();
 
 	if (ts->report_data != NULL)
@@ -4613,6 +4769,9 @@ static int synaptics_ts_suspend(struct device *dev)
 #if defined(CONFIG_SYNC_TOUCH_STATUS)
 	switch_sensor_hub(ts, 1);
 #endif
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	scr_suspended = true;
+#endif
 	return 0;
 }
 
@@ -4692,6 +4851,9 @@ static int synaptics_ts_resume(struct device *dev)
 		hrtimer_start(&ts->timer, ktime_set(1, 0), HRTIMER_MODE_REL);
 
 	ts->suspended = false;
+#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+	scr_suspended = false;
+#endif 
 	return 0;
 }
 

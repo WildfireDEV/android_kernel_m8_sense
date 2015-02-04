@@ -58,6 +58,10 @@ extern int get_partition_num_by_name(char *name);
 
 #endif
 
+#ifdef CONFIG_KEXEC_HARDBOOT
+#include <asm/kexec.h>
+#endif
+
 #if defined(CONFIG_MACH_EYE_UL)
 #define PN547_I2C_POWEROFF_SEQUENCE_FOR_EYE
 #elif defined(CONFIG_MACH_EYE_WHL)
@@ -582,7 +586,7 @@ void msm_restart(char mode, const char *cmd)
 		
 		msm_disable_wdog_debug();
 		halt_spmi_pmic_arbiter();
-#if defined(CONFIG_ARCH_DUMMY) && defined(CONFIG_HTC_DEBUG_WATCHDOG)
+#if defined(CONFIG_ARCH_MSM8226) && defined(CONFIG_HTC_DEBUG_WATCHDOG)
 		msm_watchdog_reset();
 #else
 		__raw_writel(0, MSM_MPM2_PSHOLD_BASE);
@@ -615,6 +619,19 @@ static int __init msm_pmic_restart_init(void)
 
 late_initcall(msm_pmic_restart_init);
 
+#ifdef CONFIG_KEXEC_HARDBOOT
+static void msm_kexec_hardboot_hook(void)
+{
+	set_dload_mode(0);
+
+	// Set PMIC to restart-on-poweroff
+	pm8xxx_reset_pwr_off(1);
+
+	// These are executed on normal reboot, but with kexec-hardboot,
+	// they reboot/panic the system immediately.
+}
+#endif
+
 static int __init msm_restart_init(void)
 {
 	htc_restart_handler_init();
@@ -635,6 +652,10 @@ static int __init msm_restart_init(void)
 
 	if (scm_is_call_available(SCM_SVC_PWR, SCM_IO_DISABLE_PMIC_ARBITER) > 0)
 		scm_pmic_arbiter_disable_supported = true;
+
+#ifdef CONFIG_KEXEC_HARDBOOT
+	kexec_hardboot_hook = msm_kexec_hardboot_hook;
+#endif
 
 	return 0;
 }
