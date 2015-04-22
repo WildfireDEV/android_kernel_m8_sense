@@ -150,7 +150,11 @@ MODULE_PARM_DESC(
 #define IOWRITE_DUMP_TOTAL_THRESHOLD	10485760 
 struct io_account {
 	char task_name[TASK_COMM_LEN];
+	char gtask_name[TASK_COMM_LEN]; 
+	char ptask_name[TASK_COMM_LEN]; 
 	unsigned int pid;
+	unsigned int tgid;
+	unsigned int ppid;
 	u64 io_amount;
 	struct list_head list;
 };
@@ -190,9 +194,8 @@ void collect_io_stats(size_t rw_bytes, int type)
 	found = 0;
 	spin_lock_irqsave(&iolist_lock, flags);
 	list_for_each_entry_safe(io_act, tmp, io_list, list) {
-		if (!strcmp(process->comm, io_act->task_name)) {
+		if ((process->pid == io_act->pid) && !strcmp(process->comm, io_act->task_name)) {
 			io_act->io_amount += rw_bytes;
-			io_act->pid = process->pid;
 			found = 1;
 			break;
 		}
@@ -204,9 +207,18 @@ void collect_io_stats(size_t rw_bytes, int type)
 		if (io_act) {
 			snprintf(io_act->task_name, sizeof(io_act->task_name), "%s", process->comm);
 			io_act->pid = process->pid;
+			io_act->tgid = process->tgid;
+			if (process->group_leader)
+				snprintf(io_act->gtask_name, sizeof(io_act->gtask_name), "%s",
+					process->group_leader->comm);
+			if (process->parent) {
+				snprintf(io_act->ptask_name, sizeof(io_act->ptask_name), "%s",
+					process->parent->comm);
+				io_act->ppid = process->parent->pid;
+			}
 			io_act->io_amount = rw_bytes;
 			spin_lock_irqsave(&iolist_lock, flags);
-			list_add_tail(&io_act->list, io_list);
+			list_add(&io_act->list, io_list);
 			spin_unlock_irqrestore(&iolist_lock, flags);
 		}
 	}
@@ -229,8 +241,9 @@ static void show_iotop(void)
 	list_for_each_entry_safe(io_act, tmp, &ioread_list, list) {
 		list_del_init(&io_act->list);
 		if (i++ < 5 && io_act->io_amount > IOREAD_DUMP_THRESHOLD)
-			pr_info("[READ IOTOP%d] %s(%u): %llu KB\n", i, io_act->task_name,
-				io_act->pid, io_act->io_amount / 1024);
+			pr_info("[READ IOTOP%d] %s(pid %u, tgid %u(%s), ppid %u(%s)): %llu KB\n",
+				i, io_act->task_name, io_act->pid, io_act->tgid, io_act->gtask_name,
+				io_act->ppid, io_act->ptask_name, io_act->io_amount / 1024);
 		task_cnt++;
 		total_bytes += io_act->io_amount;
 		kfree(io_act);
@@ -245,8 +258,9 @@ static void show_iotop(void)
 	list_for_each_entry_safe(io_act, tmp, &iowrite_list, list) {
 		list_del_init(&io_act->list);
 		if (i++ < 5 && io_act->io_amount >= IOWRITE_DUMP_THRESHOLD)
-			pr_info("[WRITE IOTOP%d] %s(%u): %llu KB\n", i, io_act->task_name,
-				io_act->pid, io_act->io_amount / 1024);
+			pr_info("[WRITE IOTOP%d] %s(pid %u, tgid %u(%s), ppid %u(%s)): %llu KB\n",
+				i, io_act->task_name, io_act->pid, io_act->tgid, io_act->gtask_name,
+				io_act->ppid, io_act->ptask_name, io_act->io_amount / 1024);
 		task_cnt++;
 		total_bytes += io_act->io_amount;
 		kfree(io_act);

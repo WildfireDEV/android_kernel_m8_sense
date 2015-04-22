@@ -482,19 +482,26 @@ static void htc_8974_add_usb_devices(void)
 		android_usb_pdata.nluns = 2;
 		android_usb_pdata.cdrom_lun = 0x2;
 #else
+#ifdef CONFIG_EXT_CMD_LINE
 		if (is_m8whl) {
 			android_usb_pdata.nluns = 2;
 			android_usb_pdata.cdrom_lun = 0x2;
 		} else {
+#endif
 			android_usb_pdata.nluns = 1;
 			android_usb_pdata.cdrom_lun = 0x1;
+#ifdef CONFIG_EXT_CMD_LINE
 		}
+#endif
 #endif
 
 	}
 #ifdef CONFIG_MACH_M8
+#ifdef CONFIG_EXT_CMD_LINE
 	if (is_m8)
+#endif
 		android_usb_pdata.product_id	= 0x061A;
+#ifdef CONFIG_EXT_CMD_LINE
 	else if (is_m8wl) {
 		android_usb_pdata.product_id	= 0x0616;
 		android_usb_pdata.vzw_unmount_cdrom = 1;
@@ -504,6 +511,7 @@ static void htc_8974_add_usb_devices(void)
 		android_usb_pdata.product_id	= 0x061A;
 	else if (is_m8dug)
 		android_usb_pdata.product_id	= 0x063B;
+#endif
 #elif defined(CONFIG_MACH_DUMMY)
 	android_usb_pdata.product_id	= 0x0616;
 	android_usb_pdata.vzw_unmount_cdrom = 1;

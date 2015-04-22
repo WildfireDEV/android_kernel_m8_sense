@@ -2640,8 +2640,7 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 			}
 		}
 
-		if (finger_pressed == 0 
-) {
+		if (finger_pressed == 0 ) {
 			if (ts->htc_event == SYN_AND_REPORT_TYPE_A) {
 				
 				if (ts->support_htc_event) {
