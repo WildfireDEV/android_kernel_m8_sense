@@ -272,6 +272,11 @@ static irqreturn_t synaptics_irq_thread(int irq, void *ptr);
 
 extern unsigned int get_tamper_sf(void);
 
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP) || defined(CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES)
+static bool scr_suspended = false;
+static int s2s_switch = 1;
+static DEFINE_MUTEX(pwrkeyworklock);
+#endif
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
 #define S2S_Y_MAX 2880
 #define S2S_X_MAX 1800
@@ -284,11 +289,8 @@ extern unsigned int get_tamper_sf(void);
 
 static int direction = 0;
 static int first_x = 0;
-static bool scr_suspended = false;
-static int s2s_switch = 1;
 
 static struct input_dev * sweep2sleep_pwrdev;
-static DEFINE_MUTEX(pwrkeyworklock);
 
 static void sweep2sleep_presspwr(struct work_struct * sweep2sleep_presspwr_work) {
 	if (!mutex_trylock(&pwrkeyworklock))
@@ -331,21 +333,21 @@ static void detect_sweep2sleep(int x, int y)
 	} else if (x_go < S2S_X_EPS)
 		return;
 
-	
-	if (!direction && first_x > S2S_X_P2)
-		direction = 1; //to left
 		
 	if (!direction && first_x < S2S_X_P1)
-		direction = 2; //to right
+		direction = 1; //to right
+	
+	if (!direction && first_x > S2S_X_P2)
+		direction = 2; //to left
 		
-		
-	if (!scr_suspended && direction == 1 && (s2s_switch == 1 || s2s_switch == 3) && x < S2S_X_P1) {
+
+	if (!scr_suspended && direction == 1 && (s2s_switch == 1 || s2s_switch == 3) && x > S2S_X_P2) {
 		pr_debug("s2s: OFF\n");
 		sweep2sleep_pwrtrigger();
 		reset_s2s();		
 	}
-
-	if (!scr_suspended && direction == 2 && (s2s_switch == 2 || s2s_switch == 3) && x > S2S_X_P2) {
+		
+	if (!scr_suspended && direction == 2 && (s2s_switch == 2 || s2s_switch == 3) && x < S2S_X_P1) {
 		pr_debug("s2s: OFF\n");
 		sweep2sleep_pwrtrigger();
 		reset_s2s();		
@@ -407,10 +409,8 @@ static bool barriery[2] = {false, false}, exec_county = true;
 static bool barrierx[2] = {false, false}, exec_countx = true;
 static int firstx = 0, firsty = 0;
 static unsigned long firsty_time = 0, firstx_time = 0;
-static bool scr_suspended = false;
 static int s2w_switch = 0, s2w_switch_temp = 0;
 static bool s2w_switch_changed = false;
-static int s2s_switch = 0;
 static int dt2w_switch = 0, dt2w_switch_temp = 0;
 static bool dt2w_switch_changed = false;
 static int gestures_switch = 0, gestures_switch_temp = 0;
@@ -455,7 +455,6 @@ static void report_gesture(int gest)
 }
 
 static struct input_dev *sweep2wake_pwrdev;
-static DEFINE_MUTEX(pwrkeyworklock);
 
 static void sweep2wake_presspwr(struct work_struct *sweep2wake_presspwr_work)
 {
@@ -2338,7 +2337,7 @@ static DEVICE_ATTR(cover, (S_IWUSR|S_IRUGO),
 	syn_cover_show, syn_cover_store);
 
 
-#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP) || defined(CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES)
 static ssize_t synaptics_sweep2sleep_show(struct device *dev,
 		struct device_attribute *attr, char *buf)
 {
@@ -2389,25 +2388,6 @@ static ssize_t synaptics_sweep2wake_dump(struct device *dev,
 static DEVICE_ATTR(sweep2wake, 0666,
 	synaptics_sweep2wake_show, synaptics_sweep2wake_dump);
 
-static ssize_t synaptics_sweep2sleep_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	size_t count = 0;
-	count += sprintf(buf, "%d\n", s2s_switch);
-	return count;
-}
-
-static ssize_t synaptics_sweep2sleep_dump(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	if (buf[0] >= '0' && buf[0] <= '3' && buf[1] == '\n')
-                if (s2s_switch != buf[0] - '0')
-		        s2s_switch = buf[0] - '0';
-	return count;
-}
-
-static DEVICE_ATTR(sweep2sleep, 0666,
-	synaptics_sweep2sleep_show, synaptics_sweep2sleep_dump);
 
 static ssize_t synaptics_doubletap2wake_show(struct device *dev, struct device_attribute *attr, char *buf)
 {
@@ -2758,7 +2738,6 @@ static int synaptics_touch_sysfs_init(void)
 		sysfs_create_file(android_touch_kobj, &dev_attr_cover.attr)
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 		|| sysfs_create_file(android_touch_kobj, &dev_attr_sweep2wake.attr) ||
-		sysfs_create_file(android_touch_kobj, &dev_attr_sweep2sleep.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_doubletap2wake.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_wake_gestures.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_vib_strength.attr) ||
@@ -2774,7 +2753,7 @@ static int synaptics_touch_sysfs_init(void)
 		if (sysfs_create_file(android_touch_kobj, &dev_attr_diag.attr))
 			return -ENOMEM;
 
-#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP) || defined(CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES)
 	ret = sysfs_create_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
 	if (ret) {
 		printk(KERN_ERR "%s: sysfs_create_file failed\n", __func__);
@@ -2835,7 +2814,6 @@ static void synaptics_touch_sysfs_remove(void)
 	sysfs_remove_file(android_touch_kobj, &dev_attr_cover.attr);
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2wake.attr);
-	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_doubletap2wake.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_wake_gestures.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_vib_strength.attr);
@@ -2845,7 +2823,7 @@ static void synaptics_touch_sysfs_remove(void)
 #ifdef SYN_WIRELESS_DEBUG
 	sysfs_remove_file(android_touch_kobj, &dev_attr_enabled.attr);
 #endif
-#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP
+#if defined(CONFIG_TOUCHSCREEN_SYNAPTICS_SWEEP2SLEEP) || defined(CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES)
 	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
 #endif
 	kobject_del(android_touch_kobj);
