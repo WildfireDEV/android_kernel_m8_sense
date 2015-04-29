@@ -277,7 +277,7 @@ static int synaptics_ts_suspend(struct device *dev);
 #define S2S_Y_MAX 2880
 #define S2S_Y_DELTA 210
 #define S2S_Y_LIMIT S2S_Y_MAX-S2S_Y_DELTA
-#define S2S_XY_EPS 360
+#define S2S_XY_EPS 400
 #define S2S_PWRKEY_DUR 60
 
 #define SWEEP_RIGHT 0x01
@@ -307,10 +307,10 @@ static int dt2w_switch = 0, dt2w_switch_temp = 0;
 static bool dt2w_switch_changed = false;
 static int gestures_switch = 0, gestures_switch_temp = 0;
 static bool gestures_switch_changed = false;
+static bool is_stock_gestures = false;
 static int pocket_detect = 0;
 static int vib_strength = 20;
 int cam_switch = 1;
-static bool cover_enable_ind = false;
 static bool scr_suspended = false;
 static int s2s_switch = 1;
 
@@ -357,7 +357,7 @@ static void sweep2sleep_pwrtrigger(int gest) {
         pwrtrigger_time[1] = pwrtrigger_time[0];
         pwrtrigger_time[0] = jiffies;	
 
-	if (pwrtrigger_time[0] - pwrtrigger_time[1] < GEST_TIMEOUT)
+	if (pwrtrigger_time[0] - pwrtrigger_time[1] < HZ/2)
 		return;
 
 	if (pocket_detect && !check_pocket()) {
@@ -391,11 +391,12 @@ static void dt2w_func(int x, int y, cputime64_t trigger_time)
 	int x_eps = 0;
 	int y_eps = 0;
 
-	if (phone_call_stat == 1)
+	if (phone_call_stat)
 		return;
 
 	x_eps = abs(dt_prev_x - x);
 	y_eps = abs(dt_prev_y - y);
+
 	if ((trigger_time - prev_time) < DT2W_TIMEOUT_MAX && (x_eps < DT2W_DELTA) && (y_eps < DT2W_DELTA)) {
 		prev_time = 0;
 		sweep2sleep_pwrtrigger(15);
@@ -458,8 +459,8 @@ static void detect_sweep2action(int x, int y)
 	if (!direction_y && first_y - y < 0)
 		direction_y = SWEEP_DOWN;
 
-	if ((direction_x & s2s_switch && !scr_suspended) ||
-	    (direction_x & s2w_switch && scr_suspended) || (direction_y & s2w_switch && scr_suspended)) {
+	if ((!scr_suspended && direction_x & s2s_switch) ||
+	    (scr_suspended && (direction_x & s2w_switch || direction_y & s2w_switch || gestures_switch))) {
 		if (jiffies - first_time < GEST_TIMEOUT) {
 			if (direction_x & s2s_switch && !scr_suspended) {
 				gest = 0;
@@ -2126,8 +2127,7 @@ static ssize_t syn_cover_store(struct device *dev,
 			queue_work(ts->syn_cover_wq, &ts->cover_work);
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-		if (scr_suspended && ts->cover_enable && !cover_enable_ind && (gestures_switch || dt2w_switch || s2w_switch)) {
-			cover_enable_ind = true;
+		if (scr_suspended && (gestures_switch || dt2w_switch || s2w_switch)) {
 			dt2w_reset_handler();
 			disable_irq_wake(ts->client->irq);
 			synaptics_ts_suspend(&ts->client->dev);
@@ -2989,7 +2989,7 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 		if (!ts->finger_count) {
-			if (scr_suspended) {
+			if (scr_suspended || ts->cover_enable) {
 				if (dt2w_switch || gestures_switch) { 
 					dt_trigger_time = ktime_to_ms(ktime_get());
 					dt2w_func(last_touch_position_x, last_touch_position_y, dt_trigger_time);
@@ -3114,12 +3114,12 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 							input_mt_sync(ts->input_dev);
 						} else if (ts->htc_event == SYN_AND_REPORT_TYPE_B) {
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-							last_touch_position_x = finger_data[i][0];
-							last_touch_position_y = finger_data[i][1];
-							if (scr_suspended && phone_call_stat == 1) {
+							if (scr_suspended && phone_call_stat) {
 								finger_data[i][0] = -10;
 								finger_data[i][1] = -10; 
 							}
+							last_touch_position_x = finger_data[i][0];
+							last_touch_position_y = finger_data[i][1];
 #endif
 							if (ts->support_htc_event) {
 								input_report_abs(ts->input_dev, ABS_MT_AMPLITUDE,
@@ -3156,7 +3156,7 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 						finger_pressed &= ~BIT(i);
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-						if (ts->finger_count < 2)
+						if (ts->finger_count < 2 && !ts->cover_enable)
 							detect_sweep2action(x_pos[i], y_pos[i]);
 #endif
 
@@ -4975,14 +4975,17 @@ static int synaptics_ts_suspend(struct device *dev)
 	}
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-	if (!cover_enable_ind && (s2w_switch || dt2w_switch || gestures_switch)) {
+	is_stock_gestures = (!s2w_switch && !dt2w_switch && !gestures_switch);
+
+	if (!is_stock_gestures) {
+		dt2w_reset_handler();
 		enable_irq_wake(ts->client->irq);
 	}
 #endif
 
 	if (ts->use_irq) {
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-		if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+		if (is_stock_gestures) {
 #endif
 			if (ts->irq_enabled) {
 				disable_irq(ts->client->irq);
@@ -4995,7 +4998,7 @@ static int synaptics_ts_suspend(struct device *dev)
 		hrtimer_cancel(&ts->timer);
 		ret = cancel_work_sync(&ts->work);
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-		if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+		if (is_stock_gestures) {
 #endif
 			if (ret && ts->use_irq) /* if work was pending disable-count is now 2 */
 				enable_irq(ts->client->irq);
@@ -5095,7 +5098,7 @@ static int synaptics_ts_suspend(struct device *dev)
 	}
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-	if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+	if (is_stock_gestures) {
 #endif
 
 		if (ts->power)
@@ -5134,7 +5137,7 @@ static int synaptics_ts_suspend(struct device *dev)
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 	}
 
-	if (!cover_enable_ind && (s2w_switch || dt2w_switch || gestures_switch)) {
+	if (!is_stock_gestures) {
 		if (pocket_detect && !phone_call_stat)
 			proximity_set(1);
 		if (!cam_switch)
@@ -5143,7 +5146,7 @@ static int synaptics_ts_suspend(struct device *dev)
 
 	scr_suspended = true;
 
-	if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+	if (is_stock_gestures) {
 #endif
 #if defined(CONFIG_SYNC_TOUCH_STATUS)
 		switch_sensor_hub(ts, 1);
@@ -5162,7 +5165,9 @@ static int synaptics_ts_resume(struct device *dev)
 	__func__, ts->package_id, ts->packrat_number, syn_panel_version, ts->config_version);
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-	if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+	is_stock_gestures = (!s2w_switch && !dt2w_switch && !gestures_switch);
+
+	if (is_stock_gestures) {
 #endif
 #if defined(CONFIG_SYNC_TOUCH_STATUS)
 		switch_sensor_hub(ts, 0);
@@ -5170,11 +5175,11 @@ static int synaptics_ts_resume(struct device *dev)
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 	}
 
-	if (!cover_enable_ind && (s2w_switch || dt2w_switch || gestures_switch)) {
+	if (!is_stock_gestures) {
 		disable_irq_wake(ts->client->irq);
 	}
 
-	if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+	if (is_stock_gestures) {
 #endif 
 
 		if (ts->power) {
@@ -5237,7 +5242,7 @@ static int synaptics_ts_resume(struct device *dev)
 	}
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-	if (cover_enable_ind || (!s2w_switch && !dt2w_switch && !gestures_switch)) {
+	if (is_stock_gestures) {
 #endif
 
 		if (ts->use_irq) {
@@ -5267,7 +5272,7 @@ static int synaptics_ts_resume(struct device *dev)
 		gestures_switch_changed = false;
 	}
 
-	if (pocket_detect && !phone_call_stat && (s2w_switch || dt2w_switch || gestures_switch))
+	if (pocket_detect && !phone_call_stat && !is_stock_gestures)
 		proximity_set(0);
 
 	scr_suspended = false;
@@ -5317,10 +5322,6 @@ static int fb_notifier_callback(struct notifier_block *self,
 		switch (*blank) {
 		case FB_BLANK_UNBLANK:
 			synaptics_ts_resume(&ts->client->dev);
-#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-			if (!ts->cover_enable)
-				cover_enable_ind = false;
-#endif
 			break;
 		case FB_BLANK_POWERDOWN:
 		case FB_BLANK_HSYNC_SUSPEND:
@@ -5331,12 +5332,6 @@ static int fb_notifier_callback(struct notifier_block *self,
 				printk("[TP] Suspend , Flush cover workqueue");
 				flush_workqueue( ts->syn_cover_wq );
 			}
-
-#ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-			dt2w_reset_handler();
-			if (ts->cover_enable && !s2w_switch && !dt2w_switch && gestures_switch)
-				cover_enable_ind = true;
-#endif
 
 			synaptics_ts_suspend(&ts->client->dev);
 			break;
