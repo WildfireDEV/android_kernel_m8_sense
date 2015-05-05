@@ -933,8 +933,6 @@ static int get_proximity(struct device *dev, struct device_attribute *attr, char
 }
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-extern int cam_switch;
-
 static int proximity_flag = 0;
 
 static void sensor_enable(int sensors_id, int enabled)
@@ -1003,22 +1001,16 @@ void proximity_set(int enabled)
 	}
 }
 
-void camera_volume_button_disable(void)
-{
-	sensor_enable(Gesture_Motion_HIDI, 0);
-	sensor_enable(Gesture_Motion, 0);
-}
-
 int check_pocket(void)
 {
-	u8 data[10]={0};
+	u8 data[2]={0};
 	int ret;
 
 	CWMCU_i2c_read(mcu_data, CWSTM32_READ_Proximity, data, 2);
 	I("[WG] check pocket: data0=%d data1=%d\n", data[0], data[1]);
 	ret = data[0];
 
-	return ret;
+	return !ret;
 }
 #endif
 

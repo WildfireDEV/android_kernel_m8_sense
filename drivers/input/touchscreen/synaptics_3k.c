@@ -299,7 +299,6 @@ static int gestures_switch = 0, gestures_switch_temp = 0;
 static bool gestures_switch_changed = false;
 static int pocket_detect = 0;
 static int vib_strength = 20;
-int cam_switch = 1;
 
 static cputime64_t suspended_time = 0;
 static bool is_stock_gestures = false;
@@ -309,7 +308,7 @@ static int direction_y = 0;
 static int first_x = 0;
 static int first_y = 0;
 static int passed = 0;
-static unsigned long first_time = 0;
+static unsigned long next_time = 0;
 
 static cputime64_t prev_time = 0;
 static int dt_prev_x = 0, dt_prev_y = 0;
@@ -317,7 +316,6 @@ static int last_touch_position_x = 0, last_touch_position_y = 0;
 static unsigned long pwrtrigger_time[2] = {0, 0};
 
 static struct wake_lock wg_wakelock;
-extern void camera_volume_button_disable(void);
 extern void proximity_set(int enabled);
 extern int check_pocket(void);
 
@@ -359,10 +357,10 @@ static void sweep2sleep_pwrtrigger(int gest) {
         pwrtrigger_time[1] = pwrtrigger_time[0];
         pwrtrigger_time[0] = jiffies;	
 
-	if (pwrtrigger_time[0] - pwrtrigger_time[1] < HZ/2)
+	if (pwrtrigger_time[0] - pwrtrigger_time[1] < GEST_TIMEOUT)
 		return;
 
-	if (pocket_detect && !check_pocket()) {
+	if (pocket_detect && check_pocket()) {
 		return;
 	}
 
@@ -381,12 +379,7 @@ static void sweep2sleep_pwrtrigger(int gest) {
 static void dt2w_reset_handler(void)
 {
 	struct synaptics_ts_data *ts = gl_ts;
-
-	if (ts->gpio_reset) {
-		gpio_direction_output(ts->gpio_reset, 0);
-		msleep(1);
-		gpio_direction_output(ts->gpio_reset, 1);
-	}
+	i2c_syn_reset_handler(ts, ts->i2c_err_handler_en, "dt2w reset", __func__);
 }
 
 static void dt2w_func(int x, int y)
@@ -403,7 +396,7 @@ static void dt2w_func(int x, int y)
 	x_eps = abs(dt_prev_x - x);
 	y_eps = abs(dt_prev_y - y);
 
-	if ((trigger_time - prev_time < DT2W_TIMEOUT_MAX) && (x_eps < DT2W_DELTA) && (y_eps < DT2W_DELTA)) {
+	if (trigger_time - prev_time < DT2W_TIMEOUT_MAX && x_eps < DT2W_DELTA && y_eps < DT2W_DELTA) {
 		dt_prev_x = 0;
 		dt_prev_y = 0;
 		prev_time = 0;
@@ -422,7 +415,7 @@ static void reset_s2s(void)
 {
 	direction_x = 0;
 	direction_y = 0;
-	first_time = 0;
+	next_time = 0;
 	first_x = 0;
 	first_y = 0;
 	passed = 0;
@@ -439,37 +432,38 @@ static void detect_sweep2action(int x, int y)
 		return;
 	}
 	
-	if (!first_time) {
-		first_x = x;
-		first_y = y;
-		first_time = jiffies;
-	} else {
+	if (next_time) {
 		x_go = abs(first_x - x);
 		y_go = abs(first_y - y);
+	} else {
+		first_x = x;
+		first_y = y;
+		next_time = jiffies;
+		return;
 	}
 
 	if (!passed)
-		passed = (x_go > S2S_XY_EPS/2 - 20 && x_go < S2S_XY_EPS/2 + 20) ||
-			 (y_go > S2S_XY_EPS/2 - 20 && y_go < S2S_XY_EPS/2 + 20);
+		passed = ((x_go > S2S_XY_EPS/2 - 20) && (x_go < S2S_XY_EPS/2 + 20)) ||
+			 ((y_go > S2S_XY_EPS/2 - 20) && (y_go < S2S_XY_EPS/2 + 20));
 
 	if (!passed || (x_go < S2S_XY_EPS && y_go < S2S_XY_EPS))
 		return;
 
-	if (!direction_x && first_x - x < 0)
+	if (!direction_x && (first_x - x < 0) && x_go > S2S_XY_EPS)
 		direction_x = SWEEP_RIGHT;
 	
-	if (!direction_x && first_x - x > 0)
+	if (!direction_x && (first_x - x > 0) && x_go > S2S_XY_EPS)
 		direction_x = SWEEP_LEFT;
 	
-	if (!direction_y && first_y - y > 0)
+	if (!direction_y && (first_y - y > 0) && y_go > S2S_XY_EPS)
 		direction_y = SWEEP_UP;
 		
-	if (!direction_y && first_y - y < 0)
+	if (!direction_y && (first_y - y < 0) && y_go > S2S_XY_EPS)
 		direction_y = SWEEP_DOWN;
 
 	if ((!suspended_time && direction_x & s2s_switch) ||
-	    (suspended_time && (direction_x & s2w_switch || direction_y & s2w_switch || gestures_switch))) {
-		if (jiffies - first_time < GEST_TIMEOUT) {
+	    (suspended_time && (direction_x & s2w_switch || direction_y & s2w_switch))) {
+		if (jiffies - next_time < GEST_TIMEOUT) {
 			if (direction_x & s2s_switch && !suspended_time) {
 				gest = 0;
 			} else {
@@ -2135,16 +2129,12 @@ static ssize_t syn_cover_store(struct device *dev,
 			queue_work(ts->syn_cover_wq, &ts->cover_work);
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-		if (suspended_time && (gestures_switch || dt2w_switch || s2w_switch)) {
+		is_stock_gestures = (!s2w_switch && !dt2w_switch && !gestures_switch);
+
+		if (suspended_time && (!is_stock_gestures)) {
 			dt2w_reset_handler();
 			disable_irq_wake(ts->client->irq);
 			synaptics_ts_suspend(&ts->client->dev);
-			if(gpio_is_valid(ts->gpio_i2c)) {
-				gpio_direction_output(ts->gpio_i2c, 1);
-				ts->i2c_to_mcu = 1;
-				printk("[TP][SensorHub] Switch touch i2c to MCU (from cover)\n");
-			}
-			touch_status(1);
 		}
 #endif
 		pr_info("[TP] %s: cover_enable = %d.\n", __func__, ts->cover_enable);
@@ -2302,26 +2292,6 @@ static ssize_t synaptics_pocket_detect_dump(struct device *dev,
 
 static DEVICE_ATTR(pocket_detect, 0666,
 	synaptics_pocket_detect_show, synaptics_pocket_detect_dump);
-
-static ssize_t synaptics_camera_gesture_show(struct device *dev,
-		struct device_attribute *attr, char *buf)
-{
-	size_t count = 0;
-	count += sprintf(buf, "%d\n", cam_switch);
-	return count;
-}
-
-static ssize_t synaptics_camera_gesture_dump(struct device *dev,
-		struct device_attribute *attr, const char *buf, size_t count)
-{
-	if (buf[0] >= '0' && buf[0] <= '1' && buf[1] == '\n')
-		if (cam_switch != buf[0] - '0')
-			cam_switch = buf[0] - '0';
-	return count;
-}
-
-static DEVICE_ATTR(camera_gesture, 0666,
-	synaptics_camera_gesture_show, synaptics_camera_gesture_dump);
 #endif	
 
 enum SR_REG_STATE{
@@ -2560,7 +2530,6 @@ static int synaptics_touch_sysfs_init(void)
 		sysfs_create_file(android_touch_kobj, &dev_attr_wake_gestures.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_vib_strength.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_pocket_detect.attr) ||
-		sysfs_create_file(android_touch_kobj, &dev_attr_camera_gesture.attr) ||
 		sysfs_create_file(android_touch_kobj, &dev_attr_sweep2sleep.attr)
 #endif
 #ifdef SYN_WIRELESS_DEBUG
@@ -2571,7 +2540,7 @@ static int synaptics_touch_sysfs_init(void)
 	if (get_address_base(gl_ts, 0x54, FUNCTION))
 		if (sysfs_create_file(android_touch_kobj, &dev_attr_diag.attr))
 			return -ENOMEM;
-			
+
 #ifdef SYN_WIRELESS_DEBUG
 	ret= gpio_request(ts->gpio_irq, "synaptics_attn");
 	if (ret) {
@@ -2629,7 +2598,6 @@ static void synaptics_touch_sysfs_remove(void)
 	sysfs_remove_file(android_touch_kobj, &dev_attr_wake_gestures.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_vib_strength.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_pocket_detect.attr);
-	sysfs_remove_file(android_touch_kobj, &dev_attr_camera_gesture.attr);
 	sysfs_remove_file(android_touch_kobj, &dev_attr_sweep2sleep.attr);
 #endif
 #ifdef SYN_WIRELESS_DEBUG
@@ -2993,16 +2961,10 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 		if (!ts->finger_count) {
-			if (suspended_time || ts->cover_enable) {
-				if (dt2w_switch || gestures_switch) { 
+			if (dt2w_switch && (suspended_time || ts->cover_enable))
 					dt2w_func(last_touch_position_x, last_touch_position_y);
-				}
-				if (gestures_switch || s2w_switch) {
-					reset_s2s();
-				}
-			} else if (s2s_switch) {
+			if (s2w_switch || s2s_switch)
 				reset_s2s();
-			}
 		}
 #endif
 
@@ -3117,10 +3079,6 @@ static void synaptics_ts_finger_func(struct synaptics_ts_data *ts)
 							input_mt_sync(ts->input_dev);
 						} else if (ts->htc_event == SYN_AND_REPORT_TYPE_B) {
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
-							if (suspended_time && phone_call_stat) {
-								finger_data[i][0] = -10;
-								finger_data[i][1] = -10; 
-							}
 							last_touch_position_x = finger_data[i][0];
 							last_touch_position_y = finger_data[i][1];
 #endif
@@ -5140,11 +5098,8 @@ static int synaptics_ts_suspend(struct device *dev)
 #ifdef CONFIG_TOUCHSCREEN_SYNAPTICS_WAKE_GESTURES
 	}
 
-	if (!is_stock_gestures) {
-		if (pocket_detect && !phone_call_stat)
-			proximity_set(1);
-		if (!cam_switch)
-			camera_volume_button_disable();
+	if (!is_stock_gestures && pocket_detect && !phone_call_stat) {
+		proximity_set(1);
 	}
 
 	suspended_time = ktime_to_ms(ktime_get());
@@ -5330,12 +5285,11 @@ static int fb_notifier_callback(struct notifier_block *self,
 		case FB_BLANK_HSYNC_SUSPEND:
 		case FB_BLANK_VSYNC_SUSPEND:
 		case FB_BLANK_NORMAL:
-            		if (ts->syn_cover_wq)
+            if (ts->syn_cover_wq)
 			{
 				printk("[TP] Suspend , Flush cover workqueue");
 				flush_workqueue( ts->syn_cover_wq );
 			}
-
 			synaptics_ts_suspend(&ts->client->dev);
 			break;
 		}
