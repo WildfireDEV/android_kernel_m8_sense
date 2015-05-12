@@ -367,10 +367,14 @@ int adreno_drawctxt_wait_global(struct adreno_device *adreno_dev,
 	kgsl_mutex_unlock(&device->mutex, &device->mutex_owner);
 
 	if (timeout) {
-		if (0 == (int) wait_event_timeout(drawctxt->waiting,
+		ret = (int) wait_event_timeout(drawctxt->waiting,
 			_check_global_timestamp(device, drawctxt, timestamp),
-			msecs_to_jiffies(timeout)))
+			msecs_to_jiffies(timeout));
+
+		if (ret == 0)
 			ret = -ETIMEDOUT;
+		else if (ret > 0)
+			ret = 0;
 	} else {
 		wait_event(drawctxt->waiting,
 			_check_global_timestamp(device, drawctxt, timestamp));
@@ -601,7 +605,7 @@ int adreno_drawctxt_detach(struct kgsl_context *context)
 	 * time to wait for the commands even if a hang happens.
 	 */
 	ret = adreno_drawctxt_wait_global(adreno_dev, context,
-		drawctxt->internal_timestamp, 30 * 1000);
+		drawctxt->internal_timestamp, 10 * 1000);
 
 	/*
 	 * If the wait for global fails then nothing after this point is likely

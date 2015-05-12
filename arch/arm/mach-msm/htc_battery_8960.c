@@ -101,6 +101,9 @@ static int chg_limit_timer_sub_mask;
 #define SUSPEND_HIGHFREQ_CHECK_BIT_TALK		(1)
 #define SUSPEND_HIGHFREQ_CHECK_BIT_SEARCH	(1<<1)
 #define SUSPEND_HIGHFREQ_CHECK_BIT_MUSIC	(1<<3)
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+#define SUSPEND_HIGHFREQ_CHECK_BIT_LOW_BATT	(1<<4)
+#endif
 static int suspend_highfreq_check_reason;
 
 #define CONTEXT_STATE_BIT_TALK			(1)
@@ -1835,6 +1838,71 @@ static void adjust_store_level(int *store_level, int drop_raw, int drop_ui, int 
 	*store_level = store;
 }
 
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+#define PROTECTION_DETECT_LEVEL 2
+#define PROTECTION_COUNT 3
+#define PROTECTION_DETECTION_VOLTAGE 3500
+#define PROTECTION_SHUTDOWN_DELAY_MS 5000
+#define PROTECTION_M8_SONY_BATT_ID 2
+static void batt_force_shutdown_for_batt_protect (void)
+{
+	static int count = 0;
+	int batt_vol = htc_batt_info.rep.batt_vol;
+
+	if ((htc_batt_info.rep.level > PROTECTION_DETECT_LEVEL) &&
+		(htc_batt_info.rep.level_raw > PROTECTION_DETECT_LEVEL)) {
+		count = 0;
+		suspend_highfreq_check_reason &= ~SUSPEND_HIGHFREQ_CHECK_BIT_LOW_BATT;
+		return;
+	}
+
+#if (!(defined(CONFIG_MACH_DUMMY) || defined(CONFIG_MACH_DUMMY)))
+	
+	if (htc_batt_info.rep.batt_id != PROTECTION_M8_SONY_BATT_ID) {
+		BATT_LOG("%s: Not SONY battery", __func__);
+		return;
+	}
+#endif
+
+	suspend_highfreq_check_reason |= SUSPEND_HIGHFREQ_CHECK_BIT_LOW_BATT;
+
+	BATT_LOG("%s: Level = %d and Voltage = %d.",__func__, htc_batt_info.rep.level, batt_vol);
+
+	if (batt_vol > PROTECTION_DETECTION_VOLTAGE) {
+		count = 0;
+		return;
+	}
+
+	if (++count >= PROTECTION_COUNT) {
+		htc_batt_info.rep.level = 0;
+		BATT_LOG("%s: Set level = 0 because battery voltage low.",__func__);
+
+		wake_lock(&batt_shutdown_wake_lock);
+		schedule_delayed_work(&shutdown_work,
+				msecs_to_jiffies(PROTECTION_SHUTDOWN_DELAY_MS));
+	}
+
+	return;
+}
+#endif
+
+static int is_battery_discharging (const struct battery_info_reply *prev_batt_info_rep)
+{
+	int ret = (!prev_batt_info_rep->charging_enabled &&
+			!((prev_batt_info_rep->charging_source == 0) &&
+				htc_batt_info.rep.charging_source > 0));
+	return ret;
+}
+
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+static int is_battery_overloading (void)
+{
+	int ret = ((htc_batt_info.rep.charging_source > 0) && (htc_batt_info.rep.overload == 1));
+	return ret;
+}
+#endif
+
+
 #define DISCHG_UPDATE_PERIOD_MS			(1000 * 60)
 #define ONE_PERCENT_LIMIT_PERIOD_MS		(1000 * (60 + 10))
 #define FIVE_PERCENT_LIMIT_PERIOD_MS	(1000 * (300 + 10))
@@ -1886,9 +1954,7 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 	} else if (htc_batt_info.rep.charging_source > 0)
 		stored_level_flag = false;
 
-	if (!prev_batt_info_rep->charging_enabled &&
-			!((prev_batt_info_rep->charging_source == 0) &&
-				htc_batt_info.rep.charging_source > 0)) {
+	if (is_battery_discharging(prev_batt_info_rep)) {
 		if (time_accumulated_level_change < DISCHG_UPDATE_PERIOD_MS
 				&& !first) {
 			
@@ -2090,6 +2156,17 @@ static void batt_level_adjust(unsigned long time_since_last_update_ms)
 		critical_low_enter = 0;
 		allow_drop_one_percent_flag = false;
 	}
+
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+	if (is_battery_discharging(prev_batt_info_rep) || is_battery_overloading()) {
+		if (time_accumulated_level_change < DISCHG_UPDATE_PERIOD_MS
+				&& !first) {
+			
+			return;
+		}
+		batt_force_shutdown_for_batt_protect();
+	}
+#endif
 
 	
 	if (first)
@@ -2849,7 +2926,14 @@ static int htc_battery_prepare(struct device *dev)
 					xtime.tv_nsec / NSEC_PER_MSEC;
 
 	if (suspend_highfreq_check_reason)
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+		if (suspend_highfreq_check_reason & SUSPEND_HIGHFREQ_CHECK_BIT_LOW_BATT)
+			check_time = BATT_TIMER_UPDATE_TIME;
+		else
 		check_time = BATT_SUSPEND_HIGHFREQ_CHECK_TIME;
+#else
+		check_time = BATT_SUSPEND_HIGHFREQ_CHECK_TIME;
+#endif
 	else
 		check_time = BATT_SUSPEND_CHECK_TIME;
 
@@ -2897,7 +2981,14 @@ static void htc_battery_complete(struct device *dev)
 			htc_batt_info.state);
 
 	if (suspend_highfreq_check_reason)
+#if (defined(CONFIG_HTC_BATT_SWOLLEN_WA))
+		if (suspend_highfreq_check_reason & SUSPEND_HIGHFREQ_CHECK_BIT_LOW_BATT)
+			check_time = BATT_TIMER_UPDATE_TIME * MSEC_PER_SEC;
+		else
 		check_time = BATT_SUSPEND_HIGHFREQ_CHECK_TIME * MSEC_PER_SEC;
+#else
+		check_time = BATT_SUSPEND_HIGHFREQ_CHECK_TIME * MSEC_PER_SEC;
+#endif
 	else
 		check_time = BATT_SUSPEND_CHECK_TIME * MSEC_PER_SEC;
 

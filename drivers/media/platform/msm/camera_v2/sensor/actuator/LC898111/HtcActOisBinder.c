@@ -490,7 +490,7 @@ int32_t HtcActOisBinder_mappingTbl_i2c_write(int startup_mode, struct sensor_act
 
 	if (cur_cam_mode == CAM_MODE_CAMERA_PREVIEW) {
 
-		
+		cur_cmp_angle = 600;
 		if (cur_exp_time >= (1000/24)) {
 			cur_ois_level = 5;
 		} else if (cur_exp_time >= (1000/48)) {

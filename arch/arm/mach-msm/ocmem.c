@@ -555,7 +555,7 @@ static const struct file_operations zones_show_fops = {
 	.open = ocmem_zones_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
-	.release = single_release,
+	.release = seq_release,
 };
 
 static int ocmem_stats_show(struct seq_file *f, void *dummy)
@@ -584,7 +584,7 @@ static const struct file_operations stats_show_fops = {
 	.open = ocmem_stats_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
-	.release = single_release,
+	.release = seq_release,
 };
 
 static int ocmem_timing_show(struct seq_file *f, void *dummy)
@@ -612,7 +612,7 @@ static const struct file_operations timing_show_fops = {
 	.open = ocmem_timing_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
-	.release = single_release,
+	.release = seq_release,
 };
 
 static int ocmem_zone_init(struct platform_device *pdev)

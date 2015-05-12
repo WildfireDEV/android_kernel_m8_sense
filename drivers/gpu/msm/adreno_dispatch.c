@@ -667,8 +667,11 @@ static void remove_invalidated_cmdbatches(struct kgsl_device *device,
 			drawctxt->state == ADRENO_CONTEXT_STATE_INVALID) {
 			replay[i] = NULL;
 
+			kgsl_mutex_lock(&device->mutex, &device->mutex_owner);
 			kgsl_cancel_events_timestamp(device, cmd->context,
 				cmd->timestamp);
+			kgsl_mutex_unlock(&device->mutex, &device->mutex_owner);
+
 			kgsl_cmdbatch_destroy(cmd);
 		}
 	}

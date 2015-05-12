@@ -285,10 +285,9 @@ static int htc_batt_cell_probe(struct platform_device *pdev)
 
 no_batterydata_in_dt:
 	pr_warn("some batterydata missing in device tree\n");
+	batt_cells = NULL;
 	batt_cell_nums = 0;
 	htc_battery_cell_init(batt_cells, batt_cell_nums);
-	
-	kfree(batt_cells);
 	return rc;
 }
 

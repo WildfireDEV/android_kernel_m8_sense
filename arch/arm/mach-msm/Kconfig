@@ -1523,6 +1523,11 @@ config HTC_BATT_8960
         default n
         bool "HTC battery driver for 8960"
 
+config HTC_BATT_SWOLLEN_WA
+        depends on HTC_BATT_8960
+        default n
+        bool "HTC battery swollen workaround"
+
 config DUTY_CYCLE_LIMIT
 	bool "Duty cycle limit charging support"
 	default n

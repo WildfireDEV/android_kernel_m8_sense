@@ -2490,7 +2490,7 @@ static const struct file_operations allocations_show_fops = {
 	.open = ocmem_allocations_open,
 	.read = seq_read,
 	.llseek = seq_lseek,
-	.release = single_release,
+	.release = seq_release,
 };
 
 int ocmem_sched_init(struct platform_device *pdev)

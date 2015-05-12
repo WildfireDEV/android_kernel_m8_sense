@@ -851,9 +851,12 @@ static void hfi_process_session_init_done(
 	} else {
 		sess_close = (struct hal_session *)pkt->session_id;
 		if (sess_close) {
-			dprintk(VIDC_WARN,
-				"Sess init failed: 0x%x, 0x%p",
+			dprintk(VIDC_INFO,
+				"Sess init failed: Deleting session: 0x%x 0x%p",
 				sess_close->session_id, sess_close);
+			list_del(&sess_close->list);
+			kfree(sess_close);
+			sess_close = NULL;
 		}
 	}
 	cmd_done.size = sizeof(struct vidc_hal_session_init_done);
