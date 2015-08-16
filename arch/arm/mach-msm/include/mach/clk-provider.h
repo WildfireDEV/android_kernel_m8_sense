@@ -42,8 +42,9 @@
 #define ENABLE_VOTED	4	/* Bit pol: 1 = running; delay on disable */
 #define DELAY		5	/* No bit to check, just delay */
 
-//elementalx
+#ifdef CONFIG_EXT_CMD_LINE
 extern unsigned long arg_cpu_oc;
+#endif
 
 #ifdef CONFIG_EDP_LIMIT
 extern unsigned int edp_limit;
