@@ -41,8 +41,6 @@
 #include "wcd9320.h"
 #include "wcd9xxx-resmgr.h"
 #include "wcd9xxx-common.h"
-#include "wcdcal-hwdep.h"
-
 
 #include <mach/htc_acoustic_alsa.h>
 #undef pr_info
@@ -468,8 +466,6 @@ struct taiko_priv {
 
 	struct list_head reg_save_restore;
 	struct pm_qos_request pm_qos_req;
-	/* cal info for codec */
-	struct fw_info *fw_data;
 };
 
 static const u32 comp_shift[] = {
@@ -2910,11 +2906,8 @@ static int taiko_codec_config_mad(struct snd_soc_codec *codec)
 	int ret;
 	const struct firmware *fw;
 	struct mad_audio_cal *mad_cal;
-	struct firmware_cal *hwdep_cal = NULL;
-	const void *data;
 	const char *filename = TAIKO_MAD_AUDIO_FIRMWARE_PATH;
 	struct taiko_priv *taiko = snd_soc_codec_get_drvdata(codec);
-	size_t cal_size;
 
 	pr_debug("%s: enter\n", __func__);
 	
@@ -2999,9 +2992,6 @@ static int taiko_codec_config_mad(struct snd_soc_codec *codec)
 	pm_qos_update_request(&taiko->pm_qos_req,
 			      PM_QOS_DEFAULT_VALUE);
 	pm_qos_remove_request(&taiko->pm_qos_req);
-err:
-	if (!hwdep_cal)
-		release_firmware(fw);
 	return ret;
 }
 
@@ -3566,14 +3556,11 @@ static int taiko_codec_enable_anc(struct snd_soc_dapm_widget *w,
 	int num_anc_slots;
 	struct wcd9xxx_anc_header *anc_head;
 	struct taiko_priv *taiko = snd_soc_codec_get_drvdata(codec);
-	struct firmware_cal *hwdep_cal = NULL;
 	u32 anc_writes_size = 0;
 	int anc_size_remaining;
 	u32 *anc_ptr;
 	u16 reg;
 	u8 mask, val, old_val;
-	size_t cal_size;
-	const void *data;
 
 
 	if (taiko && taiko->anc_func == 0)
@@ -3582,27 +3569,6 @@ static int taiko_codec_enable_anc(struct snd_soc_dapm_widget *w,
 	switch (event) {
 	case SND_SOC_DAPM_PRE_PMU:
 		filename = "wcd9320/wcd9320_anc.bin";
-		hwdep_cal = wcdcal_get_fw_cal(taiko->fw_data, WCD9XXX_ANC_CAL);
-		if (hwdep_cal) {
-			data = hwdep_cal->data;
-			cal_size = hwdep_cal->size;
-			dev_dbg(codec->dev, "%s: using hwdep calibration\n",
-				__func__);
-		} else {
-			ret = request_firmware(&fw, filename, codec->dev);
-			if (ret != 0) {
-				dev_err(codec->dev, "Failed to acquire ANC data: %d\n",
-					ret);
-				return -ENODEV;
-			}
-			if (!fw) {
-				dev_err(codec->dev, "failed to get anc fw");
-				return -ENODEV;
-			}
-			data = fw->data;
-			cal_size = fw->size;
-			dev_dbg(codec->dev, "%s: using request_firmware calibration\n",
-					 __func__);
 
 		ret = request_firmware(&fw, filename, codec->dev);
 		if (ret != 0) {
@@ -3676,8 +3642,6 @@ static int taiko_codec_enable_anc(struct snd_soc_dapm_widget *w,
 				(val & mask));
 		}
 		release_firmware(fw);
-		if (!hwdep_cal)
-			release_firmware(fw);
 		break;
 	case SND_SOC_DAPM_PRE_PMD:
 		msleep(40);
@@ -3690,11 +3654,6 @@ static int taiko_codec_enable_anc(struct snd_soc_dapm_widget *w,
 		break;
 	}
 	return 0;
-err:
-	if (!hwdep_cal)
-		release_firmware(fw);
-	return ret;
-
 }
 
 static int taiko_hph_pa_event(struct snd_soc_dapm_widget *w,
@@ -6877,27 +6836,6 @@ static void taiko_cleanup_irqs(struct taiko_priv *taiko)
 
 	wcd9xxx_free_irq(core_res, WCD9XXX_IRQ_SLIMBUS, taiko);
 }
-static
-struct firmware_cal *taiko_get_hwdep_fw_cal(struct snd_soc_codec *codec,
-			enum wcd_cal_type type)
-{
-	struct taiko_priv *taiko;
-	struct firmware_cal *hwdep_cal;
-
-	if (!codec) {
-		pr_err("%s: NULL codec pointer\n", __func__);
-		return NULL;
-	}
-	taiko = snd_soc_codec_get_drvdata(codec);
-	hwdep_cal = wcdcal_get_fw_cal(taiko->fw_data, type);
-	if (!hwdep_cal) {
-		dev_err(codec->dev, "%s: cal not sent by %d\n",
-				 __func__, type);
-		return NULL;
-	}
-
-	return hwdep_cal;
-}
 
 int taiko_hs_detect(struct snd_soc_codec *codec,
 		    struct wcd9xxx_mbhc_config *mbhc_cfg)
@@ -7138,7 +7076,6 @@ static const struct wcd9xxx_mbhc_cb mbhc_cb = {
 	.get_cdc_type = taiko_get_cdc_type,
 	.setup_zdet = taiko_setup_zdet,
 	.compute_impedance = taiko_compute_impedance,
-	.get_hwdep_fw_cal = taiko_get_hwdep_fw_cal,
 };
 
 static const struct wcd9xxx_mbhc_intr cdc_intr_ids = {
@@ -7594,7 +7531,6 @@ static int taiko_codec_remove(struct snd_soc_codec *codec)
 
 	taiko->spkdrv_reg = NULL;
 
-	kfree(taiko->fw_data);
 	kfree(taiko);
 	return 0;
 }
