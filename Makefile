@@ -248,7 +248,7 @@ CONFIG_SHELL := $(shell if [ -x "$$BASH" ]; then echo $$BASH; \
 
 HOSTCC       = gcc
 HOSTCXX      = g++
-HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer -std=gnu89
+HOSTCFLAGS   = -Wall -Wmissing-prototypes -Wstrict-prototypes -O2 -fomit-frame-pointer
 HOSTCXXFLAGS = -O2
 
 # Decide whether to build built-in, modular, or both.
@@ -333,7 +333,7 @@ include $(srctree)/scripts/Kbuild.include
 
 AS		= $(CROSS_COMPILE)as
 LD		= $(CROSS_COMPILE)ld
-REAL_CC		= ccache $(CROSS_COMPILE)gcc
+REAL_CC		= $(CROSS_COMPILE)gcc
 CPP		= $(CC) -E
 AR		= $(CROSS_COMPILE)ar
 NM		= $(CROSS_COMPILE)nm
@@ -354,15 +354,10 @@ CC		= $(srctree)/scripts/gcc-wrapper.py $(REAL_CC)
 
 CHECKFLAGS     := -D__linux__ -Dlinux -D__STDC__ -Dunix -D__unix__ \
 		  -Wbitwise -Wno-return-void $(CF)
-MODFLAGS	= -marm -mcpu=cortex-a15 -mtune=cortex-a15 -mfpu=neon-vfpv4 \
-                  -mvectorize-with-neon-quad -fgcse-after-reload -fgcse-sm \
-                  -fgcse-las -ftree-loop-im -ftree-loop-ivcanon -fivopts \
-                  -ftree-vectorize -fmodulo-sched -ffast-math \
-                  -funsafe-math-optimizations -std=gnu89
-CFLAGS_MODULE   = -DMODULE $(MODFLAGS)
-AFLAGS_MODULE   = -DMODULE $(MODFLAGS)
+CFLAGS_MODULE   =
+AFLAGS_MODULE   =
 LDFLAGS_MODULE  =
-CFLAGS_KERNEL	= $(MODFLAGS)
+CFLAGS_KERNEL	= -fmodulo-sched -fmodulo-sched-allow-regmoves -fgcse-lm -fgcse-sm -fsched-spec-load -ffast-math -fsingle-precision-constant -mtune=cortex-a15 -mfpu=neon-vfpv4
 AFLAGS_KERNEL	=
 CFLAGS_GCOV	= -fprofile-arcs -ftest-coverage
 
@@ -376,14 +371,12 @@ LINUXINCLUDE    := -I$(srctree)/arch/$(hdr-arch)/include \
 
 KBUILD_CPPFLAGS := -D__KERNEL__
 
-
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
 		   -Wno-unused-function \
 		   -Wno-format-security \
-		   -fno-delete-null-pointer-checks \
-		   $(MODFLAGS)
+		   -fno-delete-null-pointer-checks
 KBUILD_AFLAGS_KERNEL :=
 KBUILD_CFLAGS_KERNEL :=
 KBUILD_AFLAGS   := -D__ASSEMBLY__
@@ -589,9 +582,6 @@ ifneq ($(CONFIG_FRAME_WARN),0)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
 endif
 
-# Tell gcc to never replace conditional load with a non-conditional one
-KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
-
 # Force gcc to behave correct even for buggy distributions
 ifndef CONFIG_CC_STACKPROTECTOR
 KBUILD_CFLAGS += $(call cc-option, -fno-stack-protector)
@@ -653,11 +643,8 @@ KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
 
-# disallow errors like 'EXPORT_GPL(foo);' with missing header
-KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
-
-# require functions to have arguments in prototypes, not empty 'int foo()'
-KBUILD_CFLAGS   += $(call cc-option,-Werror=strict-prototypes)
+# conserve stack if available
+KBUILD_CFLAGS   += $(call cc-option,-fconserve-stack)
 
 # use the deterministic mode of AR if available
 KBUILD_ARFLAGS := $(call ar-option,D)
@@ -735,7 +722,7 @@ export mod_strip_cmd
 
 
 ifeq ($(KBUILD_EXTMOD),)
-core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/ frandom/
+core-y		+= kernel/ mm/ fs/ ipc/ security/ crypto/ block/
 
 vmlinux-dirs	:= $(patsubst %/,%,$(filter %/, $(init-y) $(init-m) \
 		     $(core-y) $(core-m) $(drivers-y) $(drivers-m) \
