@@ -371,6 +371,7 @@ LINUXINCLUDE    := -I$(srctree)/arch/$(hdr-arch)/include \
 
 KBUILD_CPPFLAGS := -D__KERNEL__
 
+
 KBUILD_CFLAGS   := -Wall -Wundef -Wstrict-prototypes -Wno-trigraphs \
 		   -fno-strict-aliasing -fno-common \
 		   -Werror-implicit-function-declaration \
@@ -582,6 +583,9 @@ ifneq ($(CONFIG_FRAME_WARN),0)
 KBUILD_CFLAGS += $(call cc-option,-Wframe-larger-than=${CONFIG_FRAME_WARN})
 endif
 
+# Tell gcc to never replace conditional load with a non-conditional one
+KBUILD_CFLAGS	+= $(call cc-option,--param=allow-store-data-races=0)
+
 # Force gcc to behave correct even for buggy distributions
 ifndef CONFIG_CC_STACKPROTECTOR
 KBUILD_CFLAGS += $(call cc-option, -fno-stack-protector)
@@ -643,8 +647,11 @@ KBUILD_CFLAGS += $(call cc-disable-warning, pointer-sign)
 # disable invalid "can't wrap" optimizations for signed / pointers
 KBUILD_CFLAGS	+= $(call cc-option,-fno-strict-overflow)
 
-# conserve stack if available
-KBUILD_CFLAGS   += $(call cc-option,-fconserve-stack)
+# disallow errors like 'EXPORT_GPL(foo);' with missing header
+KBUILD_CFLAGS   += $(call cc-option,-Werror=implicit-int)
+
+# require functions to have arguments in prototypes, not empty 'int foo()'
+KBUILD_CFLAGS   += $(call cc-option,-Werror=strict-prototypes)
 
 # use the deterministic mode of AR if available
 KBUILD_ARFLAGS := $(call ar-option,D)
